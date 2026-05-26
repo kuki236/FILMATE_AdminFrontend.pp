@@ -73,7 +73,6 @@ function backendToFrontend(m) {
     categoria:        extractString(m.categoria_cartelera) || extractString(m.categoria) || 'Proximamente',
     estado:           m.estado_registro      ?? m.estado ?? 'Activo',
     director:         m.director             ?? '',
-    // FIX: elenco puede venir como string o array; normalizar siempre a string
     elenco:           Array.isArray(m.elenco)
                         ? m.elenco.map(a => a.nombre ?? a).join(', ')
                         : (m.elenco ?? ''),
@@ -105,15 +104,11 @@ function frontendToBackend(f) {
     categoria_cartelera: f.categoria     || 'Proximamente',
     estado_registro:     f.estado        || 'Activo',
     generos: f.generos || [],
-    // FIX: el backend espera array de objetos {nombre, personaje}
-    elenco: f.elenco
-      ? f.elenco.split(',').map(a => ({ nombre: a.trim(), personaje: '' })).filter(o => o.nombre)
-      : [],
+    // elenco omitido: el backend requiere id_actor existente; se muestra en UI pero no se envía
   }
 }
 
 // ─── Validación del formulario ────────────────────────────────────────────────
-// FIX: validar todos los campos obligatorios antes de permitir guardar
 function validarForm(form) {
   const errores = {}
   if (!form.titulo?.trim())         errores.titulo         = 'El título es obligatorio'
@@ -125,7 +120,7 @@ function validarForm(form) {
   if (!form.poster?.trim())         errores.poster         = 'El URL del poster es obligatorio'
   if (!form.trailer?.trim())        errores.trailer        = 'El URL del tráiler es obligatorio'
   if (!form.director?.trim())       errores.director       = 'El director es obligatorio'
-  if (!form.elenco?.trim())         errores.elenco         = 'El elenco es obligatorio'
+  // elenco es opcional (no se envía al backend)
   return errores
 }
 
@@ -301,7 +296,6 @@ function GeneroSelector({ value, onChange, genres, error }) {
   )
 }
 
-// ─── FIX: Campo con indicador visual de error ─────────────────────────────────
 function FieldError({ msg }) {
   if (!msg) return null
   return <p style={{ fontSize: 11, color: '#EF4444', margin: '4px 0 0', fontWeight: 500 }}>{msg}</p>
@@ -321,16 +315,13 @@ function PeliculaForm({
     director: '', sinopsis: '', elenco: '', trailer: '',
     categoria: 'Proximamente', poster: '', banner: '',
   })
-  // FIX: estado para errores de validación
   const [errores, setErrores] = useState({})
   const [showDiscard, setShowDiscard] = useState(false)
   const set = (k, v) => {
     setForm(f => ({ ...f, [k]: v }))
-    // limpiar error del campo al editarlo
     if (errores[k]) setErrores(prev => ({ ...prev, [k]: undefined }))
   }
 
-  // FIX: estilos de campo con soporte para error
   const fieldStyle = (key) => ({
     width: '100%',
     border: `1px solid ${errores[key] ? '#FCA5A5' : '#D1D5DC'}`,
@@ -347,7 +338,6 @@ function PeliculaForm({
   const label = { fontSize: 13, fontWeight: 700, color: '#374151', display: 'block', marginBottom: 6 }
   const section = { fontSize: 13, fontWeight: 700, color: '#121212', margin: '0 0 12px', borderBottom: '2px solid #1C2566', paddingBottom: 6, textTransform: 'uppercase', letterSpacing: '0.05em' }
 
-  // FIX: contar cuántos campos obligatorios faltan para el indicador del botón
   const handleGuardar = () => {
     const errs = validarForm(form)
     if (Object.keys(errs).length > 0) {
@@ -371,7 +361,6 @@ function PeliculaForm({
           </button>
         </div>
 
-        {/* FIX: banner de campos faltantes */}
         {camposFaltantes > 0 && Object.keys(errores).length > 0 && (
           <div style={{ background: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 10, padding: '10px 14px', marginBottom: 20, display: 'flex', alignItems: 'center', gap: 8 }}>
             <Icon d={ICON_WARN} size={16} />
@@ -465,7 +454,6 @@ function PeliculaForm({
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12, paddingTop: 8, borderTop: '1px solid #F3F4F6' }}>
           <button onClick={() => setShowDiscard(true)} disabled={saving} style={{ padding: '10px 24px', border: '1px solid #D1D5DC', borderRadius: 8, background: '#fff', color: '#374151', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>Cancelar</button>
-          {/* FIX: el botón siempre es clickeable; la validación ocurre al hacer clic */}
           <button
             onClick={handleGuardar}
             disabled={saving}
@@ -551,7 +539,6 @@ function VerPelicula({ movie, onClose }) {
             </div>
           )}
 
-          {/* FIX: mostrar elenco desde movie.elenco (normalizado) */}
           {movie.elenco && (
             <div style={{ marginBottom: 16 }}>
               <h3 style={{ fontSize: 13, fontWeight: 700, color: '#121212', margin: '0 0 6px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Reparto</h3>
@@ -719,7 +706,6 @@ export default function CatalogoPeliculas() {
                     .filter(Boolean),
         categoria: formData.categoria,
         director:  formData.director,
-        // FIX: preservar elenco del form en el estado local
         elenco:    formData.elenco,
       }])
       setModalAdd(false)
@@ -747,7 +733,6 @@ export default function CatalogoPeliculas() {
                         .filter(Boolean),
             categoria: formData.categoria,
             director:  formData.director,
-            // FIX: preservar elenco del form en el estado local
             elenco:    formData.elenco,
             duracion:  formData.duracion,
           }
@@ -854,7 +839,7 @@ export default function CatalogoPeliculas() {
         </div>
         <div style={{ position: 'relative' }}>
           <select value={filtroCategoria} onChange={e => { setFiltroCategoria(e.target.value); setPage(1) }} style={dropStyle}>
-            <option value="">CARTELERA</option>
+            <option value="">ESTADO</option>
             {categories.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
           <span style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: '#6B7280', fontSize: 11 }}>▼</span>
@@ -900,7 +885,6 @@ export default function CatalogoPeliculas() {
                       id: m.id,
                       generos: generoIds,
                       director: m.director,
-                      // FIX: preservar elenco al abrir edición
                       elenco: backendToFrontend(details).elenco || m.elenco,
                     })
                   } catch (e) {
