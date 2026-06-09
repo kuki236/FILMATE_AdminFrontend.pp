@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react'
 
 // ─── CONFIG ──────────────────────────────────────────────────────────────────
-const CINEMAS_BASE = '/api/cinemas'
-const ROOMS_BASE   = '/api/rooms'
+const CINEMAS_BASE      = '/api/cinemas'       // GET compartido (solo lectura)
+const CINEMAS_ADMIN_BASE = '/api/admin/cinemas' // POST / PUT / DELETE
+const ROOMS_BASE         = '/api/admin/rooms'   // CRUD completo admin
+const SEATS_BASE         = '/api/admin/seats'   // CRUD completo admin de asientos
 
 async function apiFetch(url, opts = {}) {
   const res = await fetch(url, {
@@ -20,15 +22,24 @@ async function apiFetch(url, opts = {}) {
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
 function generarAsientos(capacidad) {
-  const total = Math.min(capacidad, 120)
-  const cols  = Math.min(Math.ceil(Math.sqrt(total * 1.6)), 16)
+  const total = Math.min(capacidad, 300)
+  const cols = Math.min(Math.ceil(Math.sqrt(total * 1.6)), 16)
   const filas = Math.ceil(total / cols)
-  return Array.from({ length: filas }, (_, f) =>
-    Array.from({ length: cols }, (_, c) => {
+  const letras = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+
+  return Array.from({ length: filas }, (_, f) => {
+    const letra = letras[f] ?? `A${f}`
+    return Array.from({ length: cols }, (_, c) => {
       const idx = f * cols + c
-      return idx < total ? 'asiento' : 'vacio'
+      if (idx >= total) return { tipo: 'vacio' }
+      return {
+        tipo: 'asiento',
+        fila: letra,
+        columna: c + 1,
+        codigo: `${letra}${c + 1}`,
+      }
     })
-  )
+  })
 }
 
 // ─── MAPA DE ASIENTOS ────────────────────────────────────────────────────────
@@ -81,19 +92,46 @@ function MapaAsientos({ capacidad }) {
 
 // ─── MODAL AGREGAR / EDITAR SALA ─────────────────────────────────────────────
 function ModalSala({ modo, salaInicial, idCine, onClose, onGuardado }) {
-  const [nombre,    setNombre]    = useState(salaInicial?.nombre         ?? '')
-  const [formato,   setFormato]   = useState(salaInicial?.formato_sala   ?? '2D')
-  const [capacidad, setCapacidad] = useState(salaInicial?.capacidad_total ?? '')
-  const [loading,   setLoading]   = useState(false)
-  const [error,     setError]     = useState(null)
+  const [nombre,       setNombre]       = useState(salaInicial?.nombre_sala ?? '')
+  const [tipoSala,     setTipoSala]     = useState(salaInicial?.tipo_sala   ?? 'Stand.')
+  const [tipoFormato,  setTipoFormato]  = useState(salaInicial?.tipo_formato ?? '2D')
+  const [capacidad,    setCapacidad]    = useState(salaInicial?.capacidad_asientos ?? '')
+  const [loading,      setLoading]      = useState(false)
+  const [error,        setError]        = useState(null)
 
   const handleGuardar = async () => {
     if (!nombre.trim() || !capacidad) { setError('Completa todos los campos.'); return }
     setLoading(true); setError(null)
     try {
-      const body = { id_cine: idCine, nombre: nombre.trim(), formato_sala: formato, capacidad_total: Number(capacidad) }
+      const body = {
+        id_cine:            idCine,
+        nombre_sala:        nombre.trim(),
+        tipo_sala:          tipoSala,
+        tipo_formato:       tipoFormato,
+        capacidad_asientos: Number(capacidad),
+      }
       if (modo === 'crear') {
-        await apiFetch(`${ROOMS_BASE}/`, { method: 'POST', body: JSON.stringify(body) })
+        // Crear sala y generar asientos con el mismo layout que se muestra en la vista previa
+        const sala = await apiFetch(`${ROOMS_BASE}/`, { method: 'POST', body: JSON.stringify(body) })
+        const asientoPreview = generarAsientos(Number(capacidad))
+        const asientos = asientoPreview
+          .flat()
+          .filter(a => a.tipo === 'asiento')
+          .map(a => ({
+            id_sala: sala.id_sala,
+            fila: a.fila,
+            columna: a.columna,
+            tipo_asiento: 'Regular',
+          }))
+
+        if (asientos.length !== Number(capacidad)) {
+          throw new Error(`Error de generación: se esperaban ${capacidad} asientos, pero se generaron ${asientos.length}`)
+        }
+
+        await apiFetch(`${SEATS_BASE}/room/${sala.id_sala}/bulk`, {
+          method: 'POST',
+          body: JSON.stringify(asientos),
+        })
       } else {
         await apiFetch(`${ROOMS_BASE}/${salaInicial.id_sala}`, { method: 'PUT', body: JSON.stringify(body) })
       }
@@ -121,20 +159,23 @@ function ModalSala({ modo, salaInicial, idCine, onClose, onGuardado }) {
 
         {/* Campos */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <Field label="Nombre de la sala">
+            <input value={nombre} onChange={e => setNombre(e.target.value)}
+              placeholder="Ej. Sala 1" style={inputStyle} />
+          </Field>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Field label="Nombre de la sala">
-              <input value={nombre} onChange={e => setNombre(e.target.value)}
-                placeholder="Ej. Sala 1" style={inputStyle} />
-            </Field>
-            <Field label="Tipo / Formato">
-              <select value={formato} onChange={e => setFormato(e.target.value)} style={inputStyle}>
-                <option value="2D">2D Regular</option>
-                <option value="3D">3D</option>
+            <Field label="Tipo de sala">
+              <select value={tipoSala} onChange={e => setTipoSala(e.target.value)} style={inputStyle}>
+                <option value="Stand.">Estándar</option>
+                <option value="VIP">VIP</option>
                 <option value="IMAX">IMAX</option>
                 <option value="4DX">4DX</option>
-                <option value="VIP">VIP</option>
-                <option value="MACRO XE">MACRO XE</option>
-                <option value="Junior">Junior</option>
+              </select>
+            </Field>
+            <Field label="Formato">
+              <select value={tipoFormato} onChange={e => setTipoFormato(e.target.value)} style={inputStyle}>
+                <option value="2D">2D</option>
+                <option value="3D">3D</option>
               </select>
             </Field>
           </div>
@@ -163,21 +204,29 @@ function ModalSala({ modo, salaInicial, idCine, onClose, onGuardado }) {
 
 // ─── MODAL AGREGAR / EDITAR CINE ─────────────────────────────────────────────
 function ModalCine({ modo, cineInicial, onClose, onGuardado }) {
-  const [nombre,    setNombre]    = useState(cineInicial?.nombre    ?? '')
-  const [direccion, setDireccion] = useState(cineInicial?.direccion ?? '')
-  const [ciudad,    setCiudad]    = useState(cineInicial?.ciudad    ?? '')
-  const [loading,   setLoading]   = useState(false)
-  const [error,     setError]     = useState(null)
+  const [nombreCine,       setNombreCine]       = useState(cineInicial?.nombre_cine        ?? '')
+  const [direccion,        setDireccion]        = useState(cineInicial?.direccion          ?? '')
+  const [horariosApertura, setHorariosApertura] = useState(cineInicial?.horarios_apertura  ?? '')
+  const [urlMapa,          setUrlMapa]          = useState(cineInicial?.url_mapa_embebido  ?? '')
+  const [observaciones,    setObservaciones]    = useState(cineInicial?.observaciones      ?? '')
+  const [loading,          setLoading]          = useState(false)
+  const [error,            setError]            = useState(null)
 
   const handleGuardar = async () => {
-    if (!nombre.trim() || !direccion.trim() || !ciudad.trim()) { setError('Completa todos los campos.'); return }
+    if (!nombreCine.trim() || !direccion.trim()) { setError('Completa los campos obligatorios.'); return }
     setLoading(true); setError(null)
     try {
-      const body = { nombre: nombre.trim(), direccion: direccion.trim(), ciudad: ciudad.trim() }
+      const body = {
+        nombre_cine:       nombreCine.trim(),
+        direccion:         direccion.trim(),
+        horarios_apertura: horariosApertura.trim() || null,
+        url_mapa_embebido: urlMapa.trim() || null,
+        observaciones:     observaciones.trim() || null,
+      }
       if (modo === 'crear') {
-        await apiFetch(`${CINEMAS_BASE}/`, { method: 'POST', body: JSON.stringify(body) })
+        await apiFetch(`${CINEMAS_ADMIN_BASE}/`, { method: 'POST', body: JSON.stringify(body) })
       } else {
-        await apiFetch(`${CINEMAS_BASE}/${cineInicial.id_cine}`, { method: 'PUT', body: JSON.stringify(body) })
+        await apiFetch(`${CINEMAS_ADMIN_BASE}/${cineInicial.id_cine}`, { method: 'PUT', body: JSON.stringify(body) })
       }
       onGuardado()
     } catch (e) { setError(e.message) }
@@ -190,8 +239,9 @@ function ModalCine({ modo, cineInicial, onClose, onGuardado }) {
       display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
     }}>
       <div style={{
-        background: '#fff', borderRadius: 14, width: '100%', maxWidth: 460,
+        background: '#fff', borderRadius: 14, width: '100%', maxWidth: 520,
         padding: '28px 32px', boxShadow: '0 8px 40px rgba(0,0,0,0.18)',
+        maxHeight: '90vh', overflowY: 'auto',
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 22 }}>
           <h2 style={{ fontSize: 20, fontWeight: 700, color: '#121212', margin: 0 }}>
@@ -200,21 +250,29 @@ function ModalCine({ modo, cineInicial, onClose, onGuardado }) {
           <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 20, color: '#9CA3AF', lineHeight: 1 }}>×</button>
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <Field label="Nombre del cine">
-            <input value={nombre} onChange={e => setNombre(e.target.value)}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <Field label="Nombre del cine *">
+            <input value={nombreCine} onChange={e => setNombreCine(e.target.value)}
               placeholder="Ej. Filmate Centro" style={inputStyle} />
           </Field>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Field label="Dirección">
-              <input value={direccion} onChange={e => setDireccion(e.target.value)}
-                placeholder="Ej. Av. Larco 123" style={inputStyle} />
-            </Field>
-            <Field label="Ciudad">
-              <input value={ciudad} onChange={e => setCiudad(e.target.value)}
-                placeholder="Ej. Lima" style={inputStyle} />
-            </Field>
-          </div>
+          <Field label="Dirección *">
+            <input value={direccion} onChange={e => setDireccion(e.target.value)}
+              placeholder="Ej. Av. Javier Prado Este 5400" style={inputStyle} />
+          </Field>
+          <Field label="Horarios de apertura">
+            <input value={horariosApertura} onChange={e => setHorariosApertura(e.target.value)}
+              placeholder="Ej. Lunes a Domingo: 1:00 PM – 11:00 PM" style={inputStyle} />
+          </Field>
+          <Field label="URL del mapa embebido">
+            <input value={urlMapa} onChange={e => setUrlMapa(e.target.value)}
+              placeholder="https://www.google.com/maps/embed?..." style={inputStyle} />
+          </Field>
+          <Field label="Observaciones">
+            <textarea value={observaciones} onChange={e => setObservaciones(e.target.value)}
+              placeholder="Información adicional sobre el cine..."
+              rows={3}
+              style={{ ...inputStyle, resize: 'vertical' }} />
+          </Field>
         </div>
 
         {error && (
@@ -334,8 +392,8 @@ export default function CinesYSalas() {
 
   // ── Cines filtrados por búsqueda ──
   const cinesFiltrados = cines.filter(c =>
-    c.nombre.toLowerCase().includes(busqueda.toLowerCase()) ||
-    c.ciudad?.toLowerCase().includes(busqueda.toLowerCase())
+    c.nombre_cine.toLowerCase().includes(busqueda.toLowerCase()) ||
+    c.direccion?.toLowerCase().includes(busqueda.toLowerCase())
   )
 
   // ── Eliminar sala ──
@@ -354,7 +412,7 @@ export default function CinesYSalas() {
   const handleEliminarCine = async () => {
     setLoadingElim(true)
     try {
-      await apiFetch(`${CINEMAS_BASE}/${confirmarElim.item.id_cine}`, { method: 'DELETE' })
+      await apiFetch(`${CINEMAS_ADMIN_BASE}/${confirmarElim.item.id_cine}`, { method: 'DELETE' })
       if (cineSeleccionado?.id_cine === confirmarElim.item.id_cine) {
         setCineSeleccionado(null)
         setSalaSeleccionada(null)
@@ -450,19 +508,19 @@ export default function CinesYSalas() {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 6 }}>
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontSize: 13, fontWeight: 600, color: '#121212', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {cine.nombre}
+                      {cine.nombre_cine}
                     </div>
                     <div style={{ fontSize: 11, color: '#9CA3AF', marginTop: 2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {cine.direccion}{cine.ciudad ? `, ${cine.ciudad}` : ''}
+                      {cine.direccion}
                     </div>
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flexShrink: 0 }}>
                     <span style={{
                       fontSize: 10, fontWeight: 600, padding: '2px 8px', borderRadius: 999,
-                      background: cine.estado ? '#DCFCE7' : '#F3F4F6',
-                      color: cine.estado ? '#008236' : '#6B7280',
+                      background: cine.estado_cine === 'Activo' ? '#DCFCE7' : '#F3F4F6',
+                      color: cine.estado_cine === 'Activo' ? '#008236' : '#6B7280',
                     }}>
-                      {cine.estado ? 'Activo' : 'Inactivo'}
+                      {cine.estado_cine}
                     </span>
                     <div style={{ display: 'flex', gap: 4 }}>
                       {/* Editar cine */}
@@ -519,7 +577,7 @@ export default function CinesYSalas() {
             <div style={{ padding: '16px 20px', borderBottom: '1px solid #F3F4F6', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
                 <h2 style={{ fontSize: 16, fontWeight: 700, color: '#121212', margin: 0 }}>
-                  Salas — {cineSeleccionado?.nombre ?? '—'}
+                  Salas — {cineSeleccionado?.nombre_cine ?? '—'}
                 </h2>
                 <p style={{ fontSize: 12, color: '#9CA3AF', margin: '3px 0 0' }}>
                   {cineSeleccionado ? `${salasDeCine.length} sala(s) registradas` : 'Selecciona un cine'}
@@ -559,13 +617,13 @@ export default function CinesYSalas() {
                     >
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                         <div>
-                          <div style={{ fontSize: 14, fontWeight: 700, color: '#121212', marginBottom: 3 }}>{sala.nombre}</div>
-                          <div style={{ fontSize: 12, color: '#6B7280', marginBottom: 6 }}>{sala.capacidad_total} asientos</div>
+                          <div style={{ fontSize: 14, fontWeight: 700, color: '#121212', marginBottom: 3 }}>{sala.nombre_sala}</div>
+                          <div style={{ fontSize: 12, color: '#6B7280', marginBottom: 6 }}>{sala.capacidad_asientos} asientos</div>
                           <span style={{
                             fontSize: 11, fontWeight: 600, padding: '2px 9px', borderRadius: 999,
                             background: '#EEF2FF', color: '#283593',
                           }}>
-                            {sala.formato_sala}
+                            {sala.tipo_sala} {sala.tipo_formato}
                           </span>
                         </div>
                         {/* Acciones */}
@@ -612,11 +670,12 @@ export default function CinesYSalas() {
               {/* Info de la sala */}
               <div style={{ width: 200, minWidth: 200 }}>
                 <h3 style={{ fontSize: 14, fontWeight: 700, color: '#121212', margin: '0 0 16px' }}>
-                  {salaSeleccionada.nombre}
+                  {salaSeleccionada.nombre_sala}
                 </h3>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  <InfoFila label="Formato" valor={salaSeleccionada.formato_sala} />
-                  <InfoFila label="Capacidad" valor={`${salaSeleccionada.capacidad_total} asientos`} />
+                  <InfoFila label="Tipo" valor={salaSeleccionada.tipo_sala} />
+                  <InfoFila label="Formato" valor={salaSeleccionada.tipo_formato} />
+                  <InfoFila label="Capacidad" valor={`${salaSeleccionada.capacidad_asientos} asientos`} />
                   <InfoFila label="ID Sala" valor={`#${salaSeleccionada.id_sala}`} />
                 </div>
                 <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -636,7 +695,7 @@ export default function CinesYSalas() {
               </div>
 
               {/* Mapa de asientos */}
-              <MapaAsientos capacidad={salaSeleccionada.capacidad_total} />
+              <MapaAsientos capacidad={salaSeleccionada.capacidad_asientos} />
             </div>
           )}
         </div>
@@ -666,8 +725,8 @@ export default function CinesYSalas() {
         <ModalConfirmar
           mensaje={
             confirmarElim.tipo === 'sala'
-              ? `¿Eliminar "${confirmarElim.item.nombre}"? Esta acción no se puede deshacer.`
-              : `¿Desactivar el cine "${confirmarElim.item.nombre}"? Dejará de aparecer en el sistema.`
+              ? `¿Eliminar "${confirmarElim.item.nombre_sala}"? Esta acción no se puede deshacer.`
+              : `¿Desactivar el cine "${confirmarElim.item.nombre_cine}"? Dejará de aparecer en el sistema.`
           }
           onConfirmar={handleConfirmarElim}
           onCancelar={() => setConfirmarElim(null)}
